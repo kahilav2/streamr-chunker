@@ -15,9 +15,9 @@ enum Index {
   ChunkId = 3,
   LastChunkId = 4
 }
-type ChunkUpdateDatum = { chunkId: string; noOfChunks: number; lastChunkId: number; progress: string };
+type ChunkUpdateDatum = { messageId: MessageId; noOfChunks: number; lastChunkId: ChunkId; progress: string };
 type ChunkMessage = {
-  b: [deviceId: string | null, body: string, messageId: string, chunkId: number, lastChunkId: number];
+  b: [deviceId: string | null, body: string, messageId: MessageId, chunkId: ChunkId, lastChunkId: ChunkId];
 };
 type RogueMessage = {
   b: [deviceId: string | null, body: object];
@@ -25,6 +25,8 @@ type RogueMessage = {
 
 type Message = ChunkMessage | RogueMessage;
 
+type ChunkId = number;
+type MessageId = string;
 
 /**
  * StreamrChunker is a abstraction layer between Streamr Network and
@@ -74,7 +76,7 @@ class StreamrChunker extends EventEmitter {
   /**
    * destroy cleans up the StreamrChunker instance
    */
-  public async destroy() {
+  public destroy() {
     clearInterval(this.intervalId);
     this.removeAllListeners();
   }
@@ -180,7 +182,7 @@ class StreamrChunker extends EventEmitter {
       const lastChunkId = this.chunks[key][0].b[Index.LastChunkId];
       const noOfChunks = this.chunks[key].length;
       chunkUpdateData.push({
-        chunkId: key,
+        messageId: key,
         noOfChunks,
         lastChunkId,
         progress: ((100 * noOfChunks) / (lastChunkId + 1)).toFixed(1)
@@ -231,8 +233,8 @@ class StreamrChunker extends EventEmitter {
     }
     try {
       return JSON.parse(accumulatedBody);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      throw new Error('StreamrChunker can not parse the pieced together message: ' + err.toString());
     }
   }
 
@@ -297,15 +299,12 @@ class StreamrChunker extends EventEmitter {
     }
 
     const chunks = this.createChunks(json);
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        this.emit('publish', chunks[i]);
-        await new Promise((resolve) => {
-          setTimeout(resolve, TIME_BETWEEN_PUBLISHED_CHUNKS);
-        });
-      }
-    } catch (err) {
-      console.error(err);
+    
+    for (let i = 0; i < chunks.length; i++) {
+      this.emit('publish', chunks[i]);
+      await new Promise((resolve) => {
+        setTimeout(resolve, TIME_BETWEEN_PUBLISHED_CHUNKS);
+      });
     }
   }
 
@@ -349,11 +348,11 @@ class StreamrChunker extends EventEmitter {
 
   
   /**
-   * getChunks returns a record containing all the chunks in the StreamrChunker instance.
+   * getChunks returns a shallow copy of all the chunks in the StreamrChunker instance.
    * @returns {Record<string, ChunkMessage[]>} the chunks record
    */
   public getChunks(): Record<string, ChunkMessage[]> {
-    return this.chunks;
+    return { ...this.chunks };
   }
 
 

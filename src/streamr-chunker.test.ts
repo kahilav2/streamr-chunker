@@ -1,12 +1,5 @@
 import { StreamrChunker } from './streamr-chunker';
 
-const mockPublish = jest.fn();
-const mockSubscribe = jest.fn();
-const mockStreamrClient = {
-  publish: mockPublish,
-  subscribe: mockSubscribe,
-};
-
 describe('StreamrChunker', () => {
   let streamrChunker: StreamrChunker;
 
