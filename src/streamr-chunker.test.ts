@@ -18,8 +18,7 @@ describe('StreamrChunker', () => {
       expect(msg.b.length).toEqual(2);
       done();
     });
-    streamrChunker.publish(message)
-
+    streamrChunker.publish(message);
   });
 
   test('should publish a chunked message', (done) => {
