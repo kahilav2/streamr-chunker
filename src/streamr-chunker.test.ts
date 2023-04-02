@@ -22,7 +22,7 @@ describe('StreamrChunker', () => {
   });
 
   test('should publish a chunked message', (done) => {
-    const largeMessage = { key: 'value'.repeat(100000) };
+    const largeMessage = { key: 'a'.repeat(1200000) };
 
     streamrChunker.on('publish', (msg) => {
       expect(msg.b.length).toEqual(5);

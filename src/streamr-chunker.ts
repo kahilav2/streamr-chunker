@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 
-const ENCRYPTED_MESSAGE_MAX_SIZE = 260000; // temporarily lowered;
+const ENCRYPTED_MESSAGE_MAX_SIZE_DEFAULT = 1000000;
 const DEADLINE_INTERVAL_TIME = 1000;
 const TIME_BETWEEN_PUBLISHED_CHUNKS = 250;
 const ENCRYPTION_OVERHEAD = 32;
@@ -46,6 +46,7 @@ type MessageId = string;
 class StreamrChunker extends EventEmitter {
   private chunks: Record<string, ChunkMessage[]> = {};
   private deadlines: Record<string, Date> = {};
+  private maxMessageSize: number;
   private intervalId: NodeJS.Timer;
   private passUnsupportedMessages = false;
   private ignoreOwnMessages = false;
@@ -54,6 +55,7 @@ class StreamrChunker extends EventEmitter {
 
   constructor() {
     super();
+    this.maxMessageSize = ENCRYPTED_MESSAGE_MAX_SIZE_DEFAULT;
     this.intervalId = setInterval(this.checkDeadlines.bind(this), DEADLINE_INTERVAL_TIME);
   }
 
@@ -126,6 +128,19 @@ class StreamrChunker extends EventEmitter {
     } else {
       this.deviceId = generateUniqueId();
     }
+    return this;
+  }
+
+  /**
+   * withMaxMessageSize sets the maximum message size that can be sent,
+   * which is used as a threshold for chunking. Note that you can set
+   * Streamr connection network.webrtcMaxMessageSize when connecting and 
+   * that value has to be larger than maxMessageSize.
+   * @param maxMessageSize - the maximum message size
+   * @returns {StreamrChunker}
+   */
+  public withMaxMessageSize(maxMessageSize: number): this {
+    this.maxMessageSize = maxMessageSize;
     return this;
   }
 
@@ -240,7 +255,7 @@ class StreamrChunker extends EventEmitter {
   private createChunks(msg: object): ChunkMessage[] {
     const chunks = [];
     const msgStr = JSON.stringify(msg);
-    const maxMessageSizePostEncryption = ENCRYPTED_MESSAGE_MAX_SIZE;
+    const maxMessageSizePostEncryption = this.maxMessageSize;
     const maxMessageSizePreEncryption = (maxMessageSizePostEncryption - ENCRYPTION_OVERHEAD) / 2;
     const maxBodySize = maxMessageSizePreEncryption - CHUNK_OVERHEAD;
     let idx = 0;
@@ -282,7 +297,7 @@ class StreamrChunker extends EventEmitter {
    */
   private tryAsRogueMessage(json: object): boolean {
     const wrappedJson = this.wrapRogue(json);
-    return this.estimateMessageSizeAfterEncryption(wrappedJson) < ENCRYPTED_MESSAGE_MAX_SIZE;
+    return this.estimateMessageSizeAfterEncryption(wrappedJson) < this.maxMessageSize;
   }
 
   /**
