@@ -1,6 +1,6 @@
 {
   "name": "streamr-chunker",
-  "version": "0.1.1-beta.0",
+  "version": "0.1.1-beta.1",
   "description": "StreamrChunker is an abstraction layer for the Streamr Network, enabling seamless transmission of objects of any size. Small messages are wrapped and sent with minimal overhead, while larger messages are chunked and reassembled upon receipt.",
   "main": "dist/index.js",
   "browser": "dist/streamr-chunker.bundle.js",
