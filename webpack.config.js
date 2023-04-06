@@ -8,18 +8,18 @@ module.exports = {
       {
         test: /\.tsx?$/,
         use: 'ts-loader',
-        exclude: /node_modules/,
-      },
-    ],
+        exclude: /node_modules/
+      }
+    ]
   },
   resolve: {
-    extensions: ['.tsx', '.ts', '.js'],
+    extensions: ['.tsx', '.ts', '.js']
   },
   output: {
     filename: 'streamr-chunker.bundle.js',
     path: path.resolve(__dirname, 'dist'),
     library: 'StreamrChunker',
     libraryTarget: 'umd',
-    globalObject: 'this',
-  },
+    globalObject: 'this'
+  }
 };

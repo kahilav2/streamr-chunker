@@ -18,9 +18,18 @@ Here is an example of how to use StreamrChunker:
 import { StreamrChunker } from 'streamr-chunker';
 import { StreamrClient } from 'streamr-client';
 
+const streamrCli = new StreamrClient({
+  auth: {
+    privateKey: "privatekey",
+  }
+})
+streamrCli.subscribe({
+  id: this.streamUrl,
+});
+
 const streamrChunker = new StreamrChunker()
     .withDeviceId()
-    .withIgnoreOwnMessages()
+    .withIgnoreOwnMessages();
 
 // Send a message of any size over the Streamr Network using StreamrChunker
 streamrChunker.publish({ key: 'longMessage'.repeat(10000) });
@@ -33,7 +42,7 @@ streamrChunker.on('message', (message) => {
 
 // Pass the messages from StreamrChunker to StreamrClient
 streamrChunker.on('publish', (message) => {
-  streamrCli.publish(message)
+  streamrCli.publish(message);
 });
 ```
 

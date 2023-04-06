@@ -1,12 +1,5 @@
 import { StreamrChunker } from './streamr-chunker';
 
-const mockPublish = jest.fn();
-const mockSubscribe = jest.fn();
-const mockStreamrClient = {
-  publish: mockPublish,
-  subscribe: mockSubscribe,
-};
-
 describe('StreamrChunker', () => {
   let streamrChunker: StreamrChunker;
 
@@ -25,12 +18,11 @@ describe('StreamrChunker', () => {
       expect(msg.b.length).toEqual(2);
       done();
     });
-    streamrChunker.publish(message)
-
+    streamrChunker.publish(message);
   });
 
   test('should publish a chunked message', (done) => {
-    const largeMessage = { key: 'value'.repeat(100000) };
+    const largeMessage = { key: 'a'.repeat(1200000) };
 
     streamrChunker.on('publish', (msg) => {
       expect(msg.b.length).toEqual(5);

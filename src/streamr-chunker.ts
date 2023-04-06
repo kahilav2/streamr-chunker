@@ -1,8 +1,10 @@
 import { EventEmitter } from 'events';
 
-const MESSAGE_MAX_SIZE = 256000;
+const ENCRYPTED_MESSAGE_MAX_SIZE_DEFAULT = 1000000;
 const DEADLINE_INTERVAL_TIME = 1000;
-const TIME_BETWEEN_PUBLISHED_CHUNKS = 100;
+const TIME_BETWEEN_PUBLISHED_CHUNKS = 250;
+const ENCRYPTION_OVERHEAD = 32;
+const CHUNK_OVERHEAD = 128;
 
 const generateUniqueId = () => {
   return Math.random().toString(36).substring(2, 8) + Math.random().toString(36).substring(2, 8);
@@ -15,9 +17,9 @@ enum Index {
   ChunkId = 3,
   LastChunkId = 4
 }
-type ChunkUpdateDatum = { chunkId: string; noOfChunks: number; lastChunkId: number; progress: string };
+type ChunkUpdateDatum = { messageId: MessageId; noOfChunks: number; lastChunkId: ChunkId; progress: string };
 type ChunkMessage = {
-  b: [deviceId: string | null, body: string, messageId: string, chunkId: number, lastChunkId: number];
+  b: [deviceId: string | null, body: string, messageId: MessageId, chunkId: ChunkId, lastChunkId: ChunkId];
 };
 type RogueMessage = {
   b: [deviceId: string | null, body: object];
@@ -25,34 +27,37 @@ type RogueMessage = {
 
 type Message = ChunkMessage | RogueMessage;
 
+type ChunkId = number;
+type MessageId = string;
 
 /**
  * StreamrChunker is a abstraction layer between Streamr Network and
- * your code that lets you send objects of any size over the 
- * Streamr Network. At publish, a small message is wrapped and sent 
- * over the network with minimal overhead. A larger message 
- * is chunked into smaller messages. At receive, your data is 
+ * your code that lets you send objects of any size over the
+ * Streamr Network. At publish, a small message is wrapped and sent
+ * over the network with minimal overhead. A larger message
+ * is chunked into smaller messages. At receive, your data is
  * gathered from the chunks.
- * 
+ *
  * Events triggered by StreamrChunker:
  * 1. 'message': emitted when StreamrChunker has a message ready for you
  * 2. 'publish': emitted when FileStream has a message to be published on the Streamr Network
+ * 3. 'chunk-update': emitted when a part of a message (chunk) has been received
  */
 class StreamrChunker extends EventEmitter {
   private chunks: Record<string, ChunkMessage[]> = {};
   private deadlines: Record<string, Date> = {};
+  private maxMessageSize: number;
   private intervalId: NodeJS.Timer;
   private passUnsupportedMessages = false;
   private ignoreOwnMessages = false;
   private deviceId: string | null = null;
   private beforeReceiveHook?: (msg: Message) => boolean;
 
-
   constructor() {
     super();
+    this.maxMessageSize = ENCRYPTED_MESSAGE_MAX_SIZE_DEFAULT;
     this.intervalId = setInterval(this.checkDeadlines.bind(this), DEADLINE_INTERVAL_TIME);
   }
-
 
   /**
    * checkDeadlines checks and removes expired chunks
@@ -61,27 +66,26 @@ class StreamrChunker extends EventEmitter {
   private checkDeadlines() {
     const now = new Date();
     const deadlineKeys = Object.keys(this.deadlines);
-    for (let i=0; i<deadlineKeys.length; i++) {
+    for (let i = 0; i < deadlineKeys.length; i++) {
       const key = deadlineKeys[i];
       if (this.deadlines[key] < now) {
         delete this.chunks[key];
         delete this.deadlines[key];
+        this.emit('chunk-update', this.getChunkUpdateData());
       }
-    }    
+    }
   }
-
 
   /**
    * destroy cleans up the StreamrChunker instance
    */
-  public async destroy() {
+  public destroy() {
     clearInterval(this.intervalId);
     this.removeAllListeners();
   }
 
-
   /**
-   * withPassUnsupportedMessages is an option that lets unsupported 
+   * withPassUnsupportedMessages is an option that lets unsupported
    * messages through
    * @returns {StreamrChunker}
    */
@@ -89,7 +93,6 @@ class StreamrChunker extends EventEmitter {
     this.passUnsupportedMessages = true;
     return this;
   }
-
 
   /**
    * withBeforeReceiveHook sets a custom hook function that will be executed before
@@ -102,7 +105,6 @@ class StreamrChunker extends EventEmitter {
     return this;
   }
 
-
   /**
    * withIgnoreOwnMessages is an option that adds a check
    * at the beginning of message receive that skips processing
@@ -113,7 +115,6 @@ class StreamrChunker extends EventEmitter {
     this.ignoreOwnMessages = true;
     return this;
   }
-
 
   /**
    * withDeviceId allows for setting a deviceId or, without a parameter, to
@@ -130,6 +131,18 @@ class StreamrChunker extends EventEmitter {
     return this;
   }
 
+  /**
+   * withMaxMessageSize sets the maximum message size that can be sent,
+   * which is used as a threshold for chunking. Note that you can set
+   * Streamr connection network.webrtcMaxMessageSize when connecting and 
+   * that value has to be larger than maxMessageSize.
+   * @param maxMessageSize - the maximum message size
+   * @returns {StreamrChunker}
+   */
+  public withMaxMessageSize(maxMessageSize: number): this {
+    this.maxMessageSize = maxMessageSize;
+    return this;
+  }
 
   /**
    * receiveHandler processes a received message, either emitting it as a single message
@@ -139,7 +152,7 @@ class StreamrChunker extends EventEmitter {
   public receiveHandler(msg: unknown) {
     if (!this.isMessage(msg)) {
       if (this.passUnsupportedMessages) {
-        this.emit("message", msg);
+        this.emit('message', msg);
       }
       return;
     }
@@ -168,7 +181,6 @@ class StreamrChunker extends EventEmitter {
     this.emit('chunk-update', this.getChunkUpdateData());
   }
 
-
   /**
    * getChunkUpdateData returns an array containing the current progress of each
    * (unfinished) chunked message.
@@ -180,7 +192,7 @@ class StreamrChunker extends EventEmitter {
       const lastChunkId = this.chunks[key][0].b[Index.LastChunkId];
       const noOfChunks = this.chunks[key].length;
       chunkUpdateData.push({
-        chunkId: key,
+        messageId: key,
         noOfChunks,
         lastChunkId,
         progress: ((100 * noOfChunks) / (lastChunkId + 1)).toFixed(1)
@@ -188,7 +200,6 @@ class StreamrChunker extends EventEmitter {
     }
     return chunkUpdateData;
   }
-
 
   /**
    * addChunk adds a received chunk message to the chunks record and updates the deadline.
@@ -199,15 +210,14 @@ class StreamrChunker extends EventEmitter {
       this.chunks[msg.b[Index.MessageId]] = [];
     }
     this.chunks[msg.b[Index.MessageId]].push(msg);
-    this.deadlines[msg.b[Index.MessageId]] = new Date((new Date()).getTime() + (20 * 1000))
+    this.deadlines[msg.b[Index.MessageId]] = new Date(new Date().getTime() + 20 * 1000);
   }
-
 
   /**
    * collectChunks checks if all chunks for a given messageId have been received.
    * If so, it combines the chunks and returns the complete message object.
    * @param messageId - id of the message to be collected
-   * @returns 
+   * @returns
    */
   private collectChunks(messageId: string): object | undefined {
     const chunks = this.chunks[messageId];
@@ -231,14 +241,13 @@ class StreamrChunker extends EventEmitter {
     }
     try {
       return JSON.parse(accumulatedBody);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      throw new Error('StreamrChunker can not parse the pieced together message: ' + err.toString());
     }
   }
 
-
   /**
-   * createChunks chunks a single large message into smaller messages when the 
+   * createChunks chunks a single large message into smaller messages when the
    * message to be sent would be too large for the Streamr Network.
    * @param msg - message to be chunked
    * @returns {ChunkMessage[]} - array of chunks
@@ -246,46 +255,68 @@ class StreamrChunker extends EventEmitter {
   private createChunks(msg: object): ChunkMessage[] {
     const chunks = [];
     const msgStr = JSON.stringify(msg);
-    const maxMessageLen = MESSAGE_MAX_SIZE / 2 - 100; // - 100 to be on the safe side
-    const noOfChunksNeeded = Math.ceil(msgStr.length / maxMessageLen);
+    const maxMessageSizePostEncryption = this.maxMessageSize;
+    const maxMessageSizePreEncryption = (maxMessageSizePostEncryption - ENCRYPTION_OVERHEAD) / 2;
+    const maxBodySize = maxMessageSizePreEncryption - CHUNK_OVERHEAD;
+    let idx = 0;
+    let body = '';
     const messageId = generateUniqueId();
-    const lastChunkId = noOfChunksNeeded - 1;
-    for (let i = 0; i < noOfChunksNeeded; i++) {
-      const chunkId = i;
-      const startingIndex = i * maxMessageLen;
-      const endingIndex = (i + 1) * maxMessageLen;
-      const body = msgStr.substring(startingIndex, endingIndex);
-      const chunk = this.wrapChunk(body, messageId, chunkId, lastChunkId);
+    let chunkId = 0;
+    while (idx < msgStr.length) {
+      // in javascript, it's not possible to cut the string at a given byte length
+      // so we have to cut it at a given character length and check if the resulting
+      // byte length is still within the limit, starting from 1 byte per character.
+      for (let byteCount = 1; byteCount <= 4; byteCount++) {
+        body = msgStr.substring(idx, idx + maxBodySize / byteCount);
+        const bodySize = new TextEncoder().encode(body).length;
+        if (bodySize <= maxBodySize) {
+          break;
+        }
+        if (byteCount === 4) {
+          throw new Error('could not find a small enough chunk size, which should never happen');
+        }
+      }
+
+      idx += body.length;
+      const chunk = this.wrapChunk(body, messageId, chunkId, -1);
       chunks.push(chunk);
+
+      chunkId++;
     }
+    // we only know how many chunks were needed after we have created them
+    chunks.forEach((chunk) => (chunk.b[Index.LastChunkId] = chunks.length - 1));
+
     return chunks;
   }
-
 
   /**
    * tryAsRogueMessage wraps the payload and sees if it is small enough
    * to be sent as a single, wholesome message
-   * @param json - json object to be wrapped 
+   * @param json - json object to be wrapped
    * @returns {boolean} whether or not the payload fits into a single message
    */
   private tryAsRogueMessage(json: object): boolean {
     const wrappedJson = this.wrapRogue(json);
-    return this.calculateJsonSize(wrappedJson) < MESSAGE_MAX_SIZE;
+    return this.estimateMessageSizeAfterEncryption(wrappedJson) < this.maxMessageSize;
   }
 
-
   /**
-   * calculateJsonSize calculates the size of the json object
+   * estimateMessageSizeAfterEncryption estimates the size of a message after it has been
+   * encrypted. This is a rough estimate, but it is good enough for our purposes.
    * @param json - json of interest
    * @returns {number} size
    */
-  private calculateJsonSize(json: object): number {
-    return JSON.stringify(json).length * 2;
+  private estimateMessageSizeAfterEncryption(content: object | string): number {
+    let contentAsString;
+    typeof content === 'string' ? (contentAsString = content) : (contentAsString = JSON.stringify(content));
+    const sizeInBytes = new TextEncoder().encode(contentAsString).length;
+    const sizeAfterEncryption = sizeInBytes * 2 + ENCRYPTION_OVERHEAD;
+    return sizeAfterEncryption;
   }
 
   /**
-   * publish signals via a 'publish' event that a message is ready to 
-   * be published on the Streamr Network. 
+   * publish signals via a 'publish' event that a message is ready to
+   * be published on the Streamr Network.
    * @param json - json object to be published
    * @returns {Promise<void>}
    */
@@ -297,49 +328,43 @@ class StreamrChunker extends EventEmitter {
     }
 
     const chunks = this.createChunks(json);
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        this.emit('publish', chunks[i]);
-        await new Promise((resolve) => {
-          setTimeout(resolve, TIME_BETWEEN_PUBLISHED_CHUNKS);
-        });
-      }
-    } catch (err) {
-      console.error(err);
+
+    for (let i = 0; i < chunks.length; i++) {
+      this.emit('publish', chunks[i]);
+      await new Promise((resolve) => {
+        setTimeout(resolve, TIME_BETWEEN_PUBLISHED_CHUNKS);
+      });
     }
   }
 
-
   /**
-  * unwrap extracts the original payload from the wrap.
-  * @param msg - the message object
-  * @returns {object | string} the extracted body
-  */
+   * unwrap extracts the original payload from the wrap.
+   * @param msg - the message object
+   * @returns {object | string} the extracted body
+   */
   private unwrap(msg: Message): object | string {
     return msg.b[Index.Body];
   }
 
-
   /**
-  * wrapRogue wraps payload that is small enough to be sent over 
-  * the Streamr Network in a single message.
-  * @param msg - the message object
-  * @returns {RogueMessage} the wrapped message
-  */
+   * wrapRogue wraps payload that is small enough to be sent over
+   * the Streamr Network in a single message.
+   * @param msg - the message object
+   * @returns {RogueMessage} the wrapped message
+   */
   private wrapRogue(json: object): RogueMessage {
     return {
       b: [this.deviceId, json]
     };
   }
 
-
   /**
-   * wrapChunk creates a wrap for a message chunk 
+   * wrapChunk creates a wrap for a message chunk
    * @param body - the chunk content
    * @param messageId - the unique identifier for the set of chunks
    * @param chunkId - the index of the chunk in the set
    * @param lastChunkId - the index of the last chunk in the set
-   * @returns 
+   * @returns
    */
   private wrapChunk(body: string, messageId: string, chunkId: number, lastChunkId: number): ChunkMessage {
     return {
@@ -347,20 +372,18 @@ class StreamrChunker extends EventEmitter {
     };
   }
 
-  
   /**
-   * getChunks returns a record containing all the chunks in the StreamrChunker instance.
+   * getChunks returns a shallow copy of all the chunks in the StreamrChunker instance.
    * @returns {Record<string, ChunkMessage[]>} the chunks record
    */
   public getChunks(): Record<string, ChunkMessage[]> {
-    return this.chunks;
+    return { ...this.chunks };
   }
-
 
   /**
    * Narrows the type of an object into Message
    * @param msg - message to be typed
-   * @returns 
+   * @returns
    */
   private isMessage(msg: unknown): msg is Message {
     if (!msg || typeof msg !== 'object' || !('b' in msg)) {
@@ -370,21 +393,19 @@ class StreamrChunker extends EventEmitter {
     return (Array.isArray(m.b) && m.b.length === 2) || m.b.length === 5;
   }
 
-
   /**
    * Narrows the type of an object into RogueMessage
    * @param msg - message to be typed
-   * @returns 
+   * @returns
    */
   private isRogueMessage(msg: unknown): msg is RogueMessage {
     return this.isMessage(msg) && msg.b.length === 2;
   }
 
-
   /**
    * Narrows the type of an object into ChunkMessage
    * @param msg - message to be typed
-   * @returns 
+   * @returns
    */
   private isChunkMessage(msg: unknown): msg is ChunkMessage {
     return this.isMessage(msg) && msg.b.length === 5;
