@@ -11,11 +11,10 @@ describe('StreamrChunker', () => {
     await streamrChunker.destroy();
   });
 
-  test('should publish a single message', (done) => {
+  test('should publish a single-chunk message', (done) => {
     const message = { key: 'value' };
     streamrChunker.on('publish', (msg) => {
-      expect(msg).toEqual(streamrChunker['wrapRogue'](message));
-      expect(msg.b.length).toEqual(2);
+      expect(msg).toEqual(streamrChunker['wrapChunk'](JSON.stringify(message), msg.b[2], msg.b[3], msg.b[4]));
       done();
     });
     streamrChunker.publish(message);
@@ -32,9 +31,12 @@ describe('StreamrChunker', () => {
     streamrChunker.publish(largeMessage);
   });
 
-  test('should unwrap a rogue message and emit a message event', (done) => {
+  test('should unwrap a single-chunk message and emit a message event', (done) => {
     const message = { key: 'value' };
-    const wrappedMessage = streamrChunker['wrapRogue'](message);
+    const deviceId = "testDeviceId";
+    const chunkId = 0;
+    const lastChunkId = 0;
+    const wrappedMessage = streamrChunker['wrapChunk'](JSON.stringify(message), deviceId, chunkId, lastChunkId)
 
     streamrChunker.on('message', (msg) => {
       expect(msg).toEqual(message);
@@ -79,7 +81,11 @@ describe('StreamrChunker', () => {
 
   test('should execute beforeReceiveHook and respect interrupt', () => {
     const message = { key: 'value' };
-    const wrappedMessage = streamrChunker['wrapRogue'](message);
+    const deviceId = "testDeviceId";
+    const chunkId = 1;
+    const lastChunkId = 2;
+
+    const wrappedMessage = streamrChunker['wrapChunk'](JSON.stringify(message), deviceId, chunkId, lastChunkId);
     const messageSpy = jest.spyOn(streamrChunker, 'emit');
     const hookFn = jest.fn(() => true);
 
