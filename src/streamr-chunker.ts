@@ -47,6 +47,7 @@ class StreamrChunker extends EventEmitter {
   private chunks: Record<string, ChunkMessage[]> = {};
   private deadlines: Record<string, Date> = {};
   private maxMessageSize: number;
+  private timeBetweenPublishedChunks: number;
   private intervalId: NodeJS.Timer;
   private passUnsupportedMessages = false;
   private ignoreOwnMessages = false;
@@ -56,6 +57,7 @@ class StreamrChunker extends EventEmitter {
   constructor() {
     super();
     this.maxMessageSize = ENCRYPTED_MESSAGE_MAX_SIZE_DEFAULT;
+    this.timeBetweenPublishedChunks = TIME_BETWEEN_PUBLISHED_CHUNKS;
     this.intervalId = setInterval(this.checkDeadlines.bind(this), DEADLINE_INTERVAL_TIME);
   }
 
@@ -141,6 +143,14 @@ class StreamrChunker extends EventEmitter {
    */
   public withMaxMessageSize(maxMessageSize: number): this {
     this.maxMessageSize = maxMessageSize;
+    return this;
+  }
+
+  /**
+   *  withTimeBetweenPublishedChunks sets the time between publishing chunks
+   */
+  public withTimeBetweenPublishedChunks(timeBetweenPublishedChunks: number): this {
+    this.timeBetweenPublishedChunks = timeBetweenPublishedChunks;
     return this;
   }
 
@@ -331,8 +341,10 @@ class StreamrChunker extends EventEmitter {
 
     for (let i = 0; i < chunks.length; i++) {
       this.emit('publish', chunks[i]);
+      if (this.timeBetweenPublishedChunks === 0) continue; // no delay
+      
       await new Promise((resolve) => {
-        setTimeout(resolve, TIME_BETWEEN_PUBLISHED_CHUNKS);
+        setTimeout(resolve, this.timeBetweenPublishedChunks);
       });
     }
   }
