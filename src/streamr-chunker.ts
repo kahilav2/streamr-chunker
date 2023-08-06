@@ -17,11 +17,14 @@ enum Index {
   ChunkId = 3,
   LastChunkId = 4
 }
+
+type ChunkDictionary = Record<string, Record<string, ChunkMessage>> 
 type ChunkUpdateDatum = { messageId: MessageId; noOfChunks: number; lastChunkId: ChunkId; progress: string };
 type ChunkMessage = {
-  b: [deviceId: string | null, body: string, messageId: MessageId, chunkId: ChunkId, lastChunkId: ChunkId];
+  b: [deviceId: DeviceId | null, body: string, messageId: MessageId, chunkId: ChunkId, lastChunkId: ChunkId];
 };
 
+type DeviceId = string;
 type ChunkId = number;
 type MessageId = string;
 
@@ -39,7 +42,7 @@ type MessageId = string;
  * 3. 'chunk-update': emitted when a part of a message (chunk) has been received
  */
 class StreamrChunker extends EventEmitter {
-  private chunks: Record<string, ChunkMessage[]> = {};
+  private chunks: ChunkDictionary = {};
   private deadlines: Record<string, Date> = {};
   private maxMessageSize: number;
   private timeBetweenPublishedChunks: number;
@@ -150,6 +153,17 @@ class StreamrChunker extends EventEmitter {
   }
 
   /**
+   * validateChunkMessage validates the chunk message
+   * @param msg 
+   * @returns
+   */
+  private validateChunkMessage(msg: ChunkMessage, chunkId: ChunkId, messageId: MessageId, lastChunkId: ChunkId) {
+    if (chunkId in this.chunks[messageId]) return false;
+    if (chunkId < 0 || chunkId >= lastChunkId) return false;
+    return true;
+  }
+
+  /**
    * receiveHandler processes a received message, either emitting it as a single message
    * or collecting and combining chunked messages.
    * @param msg - the received message
@@ -161,25 +175,56 @@ class StreamrChunker extends EventEmitter {
       }
       return;
     }
+    
+    const messageId = msg.b[Index.MessageId];
+    const chunkId = msg.b[Index.ChunkId];
+    const deviceId = msg.b[Index.DeviceId];
+    const lastChunkId = msg.b[Index.LastChunkId];
+
+    if (!this.validateChunkMessage(msg, chunkId, messageId, lastChunkId)) {
+      throw Error("invalid chunk message received");
+    }
 
     if (this.beforeReceiveHook) {
       const interrupt = this.beforeReceiveHook(msg);
       if (interrupt) return;
     }
-    if (this.ignoreOwnMessages && msg.b[Index.DeviceId] === this.deviceId) {
+
+    if (this.ignoreOwnMessages && deviceId === this.deviceId) {
       return;
     }
 
-    this.addChunk(msg);
-    const wholeMsg = this.collectChunks(msg.b[Index.MessageId]);
-    if (!wholeMsg) {
+    this.addChunk(msg, messageId, chunkId);
+    if (!this.allChunksReceived(messageId, lastChunkId)) {
       this.emit('chunk-update', this.getChunkUpdateData());
       return;
     }
+
+    const wholeMsg = this.collectChunks(messageId, lastChunkId);
+    this.deleteChunks(messageId);
+
     this.emit('message', wholeMsg);
-    delete this.chunks[msg.b[Index.MessageId]];
-    delete this.deadlines[msg.b[Index.MessageId]];
     this.emit('chunk-update', this.getChunkUpdateData());
+  }
+  
+  /**
+   * deleteChunks deletes all chunks of the given message from memory. It also removes information about deadlines.
+   * @param messageId 
+   */
+  private deleteChunks(messageId: MessageId) {
+    delete this.chunks[messageId];
+    delete this.deadlines[messageId];
+  }
+
+  /**
+   * Checks if all chunks of the given message have been received.
+   * @param messageId 
+   * @param lastChunkId 
+   * @returns
+   */
+  private allChunksReceived(messageId: MessageId, lastChunkId: ChunkId): Boolean {
+    const keys = Object.keys(this.chunks[messageId])
+    return keys.length === lastChunkId + 1
   }
 
   /**
@@ -191,7 +236,7 @@ class StreamrChunker extends EventEmitter {
     const chunkUpdateData = [];
     for (const key in this.chunks) {
       const lastChunkId = this.chunks[key][0].b[Index.LastChunkId];
-      const noOfChunks = this.chunks[key].length;
+      const noOfChunks = Object.keys(this.chunks[key]).length;
       chunkUpdateData.push({
         messageId: key,
         noOfChunks,
@@ -206,12 +251,12 @@ class StreamrChunker extends EventEmitter {
    * addChunk adds a received chunk message to the chunks record and updates the deadline.
    * @param msg - the received chunk message
    */
-  private addChunk(msg: ChunkMessage) {
-    if (!this.chunks[msg.b[Index.MessageId]]) {
-      this.chunks[msg.b[Index.MessageId]] = [];
+  private addChunk(msg: ChunkMessage, messageId: MessageId, chunkId: ChunkId) {
+    if (!this.chunks[messageId]) {
+      this.chunks[messageId] = {};
     }
-    this.chunks[msg.b[Index.MessageId]].push(msg);
-    this.deadlines[msg.b[Index.MessageId]] = new Date(new Date().getTime() + 20 * 1000);
+    this.chunks[messageId][chunkId] = msg;
+    this.deadlines[messageId] = new Date(new Date().getTime() + 20 * 1000);
   }
 
   /**
@@ -220,21 +265,12 @@ class StreamrChunker extends EventEmitter {
    * @param messageId - id of the message to be collected
    * @returns
    */
-  private collectChunks(messageId: string): object | undefined {
+  private collectChunks(messageId: string, lastChunkId: number): object {
     const chunks = this.chunks[messageId];
-    if (chunks.length === 0) return;
-
-    const lastChunkId = chunks[0].b[4];
-    const receivedChunkIds = chunks.map((ch) => ch.b[Index.ChunkId]);
-    const required = Array.from({ length: lastChunkId + 1 }, (_, i) => i); // creates a [0, 1, ..., n]
-    const everyChunkExists = required.reduce((acc, requiredVal) => {
-      return acc && receivedChunkIds.includes(requiredVal);
-    }, true);
-    if (!everyChunkExists) return;
 
     let accumulatedBody = '';
     for (let i = 0; i <= lastChunkId; i++) {
-      const ithChunk = chunks.find((ch) => ch.b[Index.ChunkId] === i);
+      const ithChunk = chunks[i];
       if (ithChunk === undefined) {
         throw new Error('ithChunk was undefined');
       }
@@ -246,7 +282,6 @@ class StreamrChunker extends EventEmitter {
       throw new Error('StreamrChunker can not parse the pieced together message: ' + err.toString());
     }
   }
-
   
   /**
    * createChunks chunks a single large message into smaller messages when the
@@ -291,7 +326,6 @@ class StreamrChunker extends EventEmitter {
     return chunks;
   }
 
-
   /**
    * publish signals via a 'publish' event that a message is ready to
    * be published on the Streamr Network.
@@ -320,7 +354,6 @@ class StreamrChunker extends EventEmitter {
     return msg.b[Index.Body];
   }
 
-
   /**
    * wrapChunk creates a wrap for a message chunk
    * @param body - the chunk content
@@ -337,9 +370,9 @@ class StreamrChunker extends EventEmitter {
 
   /**
    * getChunks returns a shallow copy of all the chunks in the StreamrChunker instance.
-   * @returns {Record<string, ChunkMessage[]>} the chunks record
+   * @returns {Record<string, ChunkMessage[]>} the chunks record 
    */
-  public getChunks(): Record<string, ChunkMessage[]> {
+  public getChunks(): ChunkDictionary {
     return { ...this.chunks };
   }
 
