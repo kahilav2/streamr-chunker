@@ -234,8 +234,11 @@ class StreamrChunker extends EventEmitter {
   private getChunkUpdateData(): ChunkUpdateDatum[] {
     const chunkUpdateData = [];
     for (const messageId in this.chunks) {
-      const lastChunkId = this.chunks[messageId][0].b[Index.LastChunkId];
-      const noOfChunks = Object.keys(this.chunks[messageId]).length;
+      const chunks = this.chunks[messageId];
+      const keys = Object.keys(chunks);
+      const exampleChunk = chunks[keys[0]];
+      const lastChunkId = exampleChunk.b[Index.LastChunkId];
+      const noOfChunks = Object.keys(chunks).length;
       chunkUpdateData.push({
         messageId,
         noOfChunks,
