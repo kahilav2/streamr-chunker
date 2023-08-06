@@ -21,11 +21,6 @@ type ChunkUpdateDatum = { messageId: MessageId; noOfChunks: number; lastChunkId:
 type ChunkMessage = {
   b: [deviceId: string | null, body: string, messageId: MessageId, chunkId: ChunkId, lastChunkId: ChunkId];
 };
-type RogueMessage = {
-  b: [deviceId: string | null, body: object];
-};
-
-type Message = ChunkMessage | RogueMessage;
 
 type ChunkId = number;
 type MessageId = string;
@@ -52,7 +47,7 @@ class StreamrChunker extends EventEmitter {
   private passUnsupportedMessages = false;
   private ignoreOwnMessages = false;
   private deviceId: string | null = null;
-  private beforeReceiveHook?: (msg: Message) => boolean;
+  private beforeReceiveHook?: (msg: any) => boolean;
 
   constructor() {
     super();
@@ -102,7 +97,7 @@ class StreamrChunker extends EventEmitter {
    * @param fn - the hook function to execute before processing the received message
    * @returns {StreamrChunker}
    */
-  public withBeforeReceiveHook(fn: (msg: Message) => boolean): this {
+  public withBeforeReceiveHook(fn: (msg: any) => boolean): this {
     this.beforeReceiveHook = fn;
     return this;
   }
@@ -160,7 +155,7 @@ class StreamrChunker extends EventEmitter {
    * @param msg - the received message
    */
   public receiveHandler(msg: unknown) {
-    if (!this.isMessage(msg)) {
+    if (!this.isChunkMessage(msg)) {
       if (this.passUnsupportedMessages) {
         this.emit('message', msg);
       }
@@ -175,10 +170,6 @@ class StreamrChunker extends EventEmitter {
       return;
     }
 
-    if (this.isRogueMessage(msg)) {
-      this.emit('message', this.unwrap(msg));
-      return;
-    }
     this.addChunk(msg);
     const wholeMsg = this.collectChunks(msg.b[Index.MessageId]);
     if (!wholeMsg) {
@@ -256,6 +247,7 @@ class StreamrChunker extends EventEmitter {
     }
   }
 
+  
   /**
    * createChunks chunks a single large message into smaller messages when the
    * message to be sent would be too large for the Streamr Network.
@@ -299,30 +291,6 @@ class StreamrChunker extends EventEmitter {
     return chunks;
   }
 
-  /**
-   * tryAsRogueMessage wraps the payload and sees if it is small enough
-   * to be sent as a single, wholesome message
-   * @param json - json object to be wrapped
-   * @returns {boolean} whether or not the payload fits into a single message
-   */
-  private tryAsRogueMessage(json: object): boolean {
-    const wrappedJson = this.wrapRogue(json);
-    return this.estimateMessageSizeAfterEncryption(wrappedJson) < this.maxMessageSize;
-  }
-
-  /**
-   * estimateMessageSizeAfterEncryption estimates the size of a message after it has been
-   * encrypted. This is a rough estimate, but it is good enough for our purposes.
-   * @param json - json of interest
-   * @returns {number} size
-   */
-  private estimateMessageSizeAfterEncryption(content: object | string): number {
-    let contentAsString;
-    typeof content === 'string' ? (contentAsString = content) : (contentAsString = JSON.stringify(content));
-    const sizeInBytes = new TextEncoder().encode(contentAsString).length;
-    const sizeAfterEncryption = sizeInBytes * 2 + ENCRYPTION_OVERHEAD;
-    return sizeAfterEncryption;
-  }
 
   /**
    * publish signals via a 'publish' event that a message is ready to
@@ -331,12 +299,6 @@ class StreamrChunker extends EventEmitter {
    * @returns {Promise<void>}
    */
   public async publish(json: object): Promise<void> {
-    const ok = this.tryAsRogueMessage(json);
-    if (ok) {
-      this.emit('publish', this.wrapRogue(json));
-      return;
-    }
-
     const chunks = this.createChunks(json);
 
     for (let i = 0; i < chunks.length; i++) {
@@ -354,21 +316,10 @@ class StreamrChunker extends EventEmitter {
    * @param msg - the message object
    * @returns {object | string} the extracted body
    */
-  private unwrap(msg: Message): object | string {
+  private unwrap(msg: ChunkMessage): object | string {
     return msg.b[Index.Body];
   }
 
-  /**
-   * wrapRogue wraps payload that is small enough to be sent over
-   * the Streamr Network in a single message.
-   * @param msg - the message object
-   * @returns {RogueMessage} the wrapped message
-   */
-  private wrapRogue(json: object): RogueMessage {
-    return {
-      b: [this.deviceId, json]
-    };
-  }
 
   /**
    * wrapChunk creates a wrap for a message chunk
@@ -397,31 +348,13 @@ class StreamrChunker extends EventEmitter {
    * @param msg - message to be typed
    * @returns
    */
-  private isMessage(msg: unknown): msg is Message {
+  private isChunkMessage(msg: unknown): msg is ChunkMessage {
     if (!msg || typeof msg !== 'object' || !('b' in msg)) {
       return false;
     }
-    const m = msg as Message;
-    return (Array.isArray(m.b) && m.b.length === 2) || m.b.length === 5;
-  }
-
-  /**
-   * Narrows the type of an object into RogueMessage
-   * @param msg - message to be typed
-   * @returns
-   */
-  private isRogueMessage(msg: unknown): msg is RogueMessage {
-    return this.isMessage(msg) && msg.b.length === 2;
-  }
-
-  /**
-   * Narrows the type of an object into ChunkMessage
-   * @param msg - message to be typed
-   * @returns
-   */
-  private isChunkMessage(msg: unknown): msg is ChunkMessage {
-    return this.isMessage(msg) && msg.b.length === 5;
-  }
+    const m = msg as ChunkMessage;
+    return Array.isArray(m.b) && m.b.length === 5;
+  }  
 }
 
 export { StreamrChunker };
