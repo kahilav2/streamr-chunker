@@ -158,8 +158,8 @@ class StreamrChunker extends EventEmitter {
    * @returns
    */
   private validateChunkMessage(msg: ChunkMessage, chunkId: ChunkId, messageId: MessageId, lastChunkId: ChunkId) {
-    if (chunkId in this.chunks[messageId]) return false;
-    if (chunkId < 0 || chunkId >= lastChunkId) return false;
+    if (this.chunks[messageId] && chunkId in this.chunks[messageId]) return false;
+    if (chunkId < 0 || chunkId > lastChunkId) return false;
     return true;
   }
 
@@ -189,7 +189,6 @@ class StreamrChunker extends EventEmitter {
       const interrupt = this.beforeReceiveHook(msg);
       if (interrupt) return;
     }
-
     if (this.ignoreOwnMessages && deviceId === this.deviceId) {
       return;
     }
@@ -234,11 +233,11 @@ class StreamrChunker extends EventEmitter {
    */
   private getChunkUpdateData(): ChunkUpdateDatum[] {
     const chunkUpdateData = [];
-    for (const key in this.chunks) {
-      const lastChunkId = this.chunks[key][0].b[Index.LastChunkId];
-      const noOfChunks = Object.keys(this.chunks[key]).length;
+    for (const messageId in this.chunks) {
+      const lastChunkId = this.chunks[messageId][0].b[Index.LastChunkId];
+      const noOfChunks = Object.keys(this.chunks[messageId]).length;
       chunkUpdateData.push({
-        messageId: key,
+        messageId,
         noOfChunks,
         lastChunkId,
         progress: ((100 * noOfChunks) / (lastChunkId + 1)).toFixed(1)
